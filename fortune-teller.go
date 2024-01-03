@@ -2,8 +2,10 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"log"
 	"math/big"
+	"net/http"
 	"os"
 	"strings"
 
@@ -12,6 +14,13 @@ import (
 
 var bot *tgbotapi.BotAPI
 var chatID int64
+var userGreeted bool
+
+type JokeAPIResponse struct {
+	Type     string `json:"type"`
+	Setup    string `json:"setup"`
+	Delivery string `json:"delivery"`
+}
 
 var botNames = [3]string{"советчик", "приятель", "эу"}
 
@@ -48,6 +57,27 @@ var answers = []string{
 	"Помните, что ваш путь уникален, и именно он формирует вашу уникальную историю.",
 	"Да",
 	"Нет",
+}
+
+func fetchRandomJoke() string {
+	apiUrl := "https://v2.jokeapi.dev/joke/Any" // URL API для получения случайной шутки
+
+	response, err := http.Get(apiUrl)
+	if err != nil {
+		return "Произошла ошибка при получении шутки."
+	}
+	defer response.Body.Close()
+
+	var jokeResponse JokeAPIResponse
+	if err := json.NewDecoder(response.Body).Decode(&jokeResponse); err != nil {
+		return "Произошла ошибка при обработке ответа от API."
+	}
+
+	if jokeResponse.Type == "twopart" {
+		return jokeResponse.Setup + "\n" + jokeResponse.Delivery
+	} else {
+		return jokeResponse.Setup
+	}
 }
 
 func connectWithTelegram() {
@@ -98,6 +128,20 @@ func sendAnswer(update *tgbotapi.Update) {
 	}
 }
 
+func getKeyboard() tgbotapi.ReplyKeyboardMarkup {
+	button1 := tgbotapi.NewKeyboardButton("Расскажи шутку")
+
+	// Создаем ряды кнопок
+	row1 := tgbotapi.NewKeyboardButtonRow(button1)
+
+	// Создаем клавиатуру с кнопками
+	keyboard := tgbotapi.NewReplyKeyboard(row1)
+
+	// Устанавливаем текст для сообщения
+	keyboard.ResizeKeyboard = true
+	return keyboard
+}
+
 func main() {
 	connectWithTelegram()
 
@@ -108,13 +152,39 @@ func main() {
 	}
 
 	for update := range updates {
-		if update.Message != nil && update.Message.Text == "/start" {
-			chatID = update.Message.Chat.ID
-			sendMessage("Привет! Я твой телеграм-бот советчик. Я здесь, чтобы помочь тебе с твоим вопросом")
-		}
+		if update.Message != nil {
+			// Проверка и установка chatID, если он еще не установлен
+			if chatID == 0 {
+				chatID = update.Message.Chat.ID
+			}
 
-		if isMessageForBot(&update) {
-			sendAnswer(&update)
+			if update.Message.Text == "/start" && !userGreeted {
+				// Greet the user and ask for their name
+
+				// Устанавливаем клавиатуру после команды /start
+				keyboard := getKeyboard()
+				msg := tgbotapi.NewMessage(chatID, "Привет! Я твой телеграм-бот советчик. Я здесь, чтобы помочь тебе с твоим вопросом. Ты можешь обращаться ко мне как \"Советчик\" или \"Приятель\". Как тебя зовут? ")
+				msg.ReplyMarkup = keyboard
+				_, err := bot.Send(msg)
+				if err != nil {
+					log.Printf("Error sending message with keyboard: %v", err)
+				}
+
+				userGreeted = true
+			} else if isMessageForBot(&update) {
+				sendAnswer(&update)
+			} else if update.Message.Text == "Расскажи шутку" {
+				// Загрузка случайной шутки и отправка пользователю
+				joke := fetchRandomJoke()
+				sendMessage(joke)
+			} else if userGreeted {
+				// Assuming the next message after the greeting is the user's name
+				// You may need to implement a more sophisticated name retrieval mechanism
+				userName := update.Message.Text
+				sendMessage("Приятно познакомиться, " + userName + "!")
+				sendMessage("Какой вопрос ты мне хочешь задать?")
+				userGreeted = false
+			}
 		}
 	}
 }
